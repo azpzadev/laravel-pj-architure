@@ -1,58 +1,141 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# laravel-pj-architure
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A Laravel 13 reference application demonstrating a **Domain-Driven, Hexagonal**
+layout on top of the standard Laravel skeleton. Ships with a working
+Sanctum-backed API authentication slice (`login`, `logout`, `user`) implemented
+end-to-end through the architecture.
 
-## About Laravel
+## Stack
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+- PHP 8.4
+- Laravel 13
+- Laravel Sanctum 4 (API token auth)
+- Pest 4 (testing)
+- Laravel Pint (formatting)
+- Laravel Boost (MCP tooling for AI agents)
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Architecture
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+The `app/` tree is split into three layers. The Domain layer is
+framework-free; Infrastructure adapts framework concerns to Domain ports; the
+HTTP layer is a thin delivery mechanism that translates requests into Domain
+DTOs.
 
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```
+app/
+├── Domain/                   # business logic, framework-free
+│   └── Auth/
+│       ├── Actions/          # one verb per use case
+│       ├── Contracts/        # ports (repos, issuers, revokers)
+│       ├── DataTransferObjects/
+│       └── Exceptions/
+├── Infrastructure/           # concrete adapters bound to Domain contracts
+│   └── Auth/
+│       ├── EloquentUserCredentialsRepository.php
+│       ├── SanctumTokenIssuer.php
+│       └── SanctumCurrentTokenRevoker.php
+├── Http/                     # delivery layer
+│   ├── Controllers/Api/
+│   ├── Requests/Api/
+│   └── Resources/
+├── Models/                   # Eloquent (persistence concern only)
+└── Providers/
+    └── DomainServiceProvider.php   # binds Domain contracts → Infrastructure
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+### Layer rules
 
-## Contributing
+- **Domain** never imports Eloquent, Sanctum, Guzzle, HTTP, or facades. The
+  only `Illuminate\*` types it may use are framework *contracts*
+  (`Illuminate\Contracts\Hashing\Hasher`, etc.).
+- **Actions** are `final readonly`, expose a single `execute()` method, take
+  DTOs in and return DTOs/`void`, and throw domain exceptions on failure.
+- **Contracts** are ports the actions depend on. Implementations live in
+  `app/Infrastructure/<Context>/` and are wired in
+  `App\Providers\DomainServiceProvider`.
+- **DTOs** are `final readonly` with constructor property promotion. They use
+  `camelCase` properties; the boundary layer (FormRequest / Resource)
+  translates wire formats.
+- **Eloquent models** are persistence-only. Repositories translate them to
+  Domain DTOs at the boundary.
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+See `app/Domain/CLAUDE.md` and `app/Infrastructure/CLAUDE.md` for the full
+guidelines.
 
-## Code of Conduct
+## Auth slice (worked example)
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+The `Auth` bounded context is a complete walk-through of the layout:
 
-## Security Vulnerabilities
+| Layer | Class |
+|---|---|
+| HTTP | `App\Http\Controllers\Api\AuthController` |
+| HTTP | `App\Http\Requests\Api\LoginRequest` |
+| HTTP | `App\Http\Resources\IssuedTokenResource` |
+| Domain action | `App\Domain\Auth\Actions\IssueApiTokenAction` |
+| Domain action | `App\Domain\Auth\Actions\RevokeCurrentTokenAction` |
+| Domain port | `App\Domain\Auth\Contracts\UserCredentialsRepository` |
+| Domain port | `App\Domain\Auth\Contracts\TokenIssuer` |
+| Domain port | `App\Domain\Auth\Contracts\CurrentTokenRevoker` |
+| Infrastructure | `App\Infrastructure\Auth\EloquentUserCredentialsRepository` |
+| Infrastructure | `App\Infrastructure\Auth\SanctumTokenIssuer` |
+| Infrastructure | `App\Infrastructure\Auth\SanctumCurrentTokenRevoker` |
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+### API endpoints
+
+| Method | URI         | Name        | Middleware              |
+|--------|-------------|-------------|-------------------------|
+| POST   | `/login`    | `api.login` | `throttle:6,1`          |
+| POST   | `/logout`   | `api.logout`| `auth:sanctum`          |
+| GET    | `/user`     | `api.user`  | `auth:sanctum`          |
+
+`POST /login` returns a plain-text Sanctum token via `IssuedTokenResource`.
+Invalid credentials throw `InvalidCredentialsException` (extends
+`ValidationException`, renders 422).
+
+## Getting started
+
+```bash
+git clone git@github.com:azpzadev/laravel-pj-architure.git
+cd laravel-pj-architure
+
+composer install
+cp .env.example .env
+php artisan key:generate
+php artisan migrate
+
+php artisan serve
+```
+
+## Testing
+
+```bash
+php artisan test --compact
+```
+
+Create new tests with:
+
+```bash
+php artisan make:test --pest Api/LoginTest
+```
+
+## Code style
+
+Format any modified PHP files before committing:
+
+```bash
+vendor/bin/pint --dirty --format agent
+```
+
+## Adding a new bounded context
+
+1. Create `app/Domain/<Context>/{Actions,Contracts,DataTransferObjects,Exceptions}/`.
+2. Define DTOs and contracts first; write the action against the contracts.
+3. Add concrete adapters under `app/Infrastructure/<Context>/`.
+4. Bind contracts to adapters in `App\Providers\DomainServiceProvider`.
+5. Add the HTTP delivery layer (`FormRequest`, `Resource`, `Controller`) that
+   translates requests into DTOs and calls the action.
+6. Cover the slice with feature tests under `tests/Feature/`.
 
 ## License
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+MIT.
